@@ -1,6 +1,5 @@
 #include "thread_pool.h"
 #include <pthread.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -17,6 +16,7 @@
 
 static void *thread_function(void *thread_pool) {
 	thread_pool_t* pool = (thread_pool_t *)thread_pool;
+	void *thread_ctx = pool->on_thread_start ? pool->on_thread_start() : NULL;
 
 	while (1) {
 		pthread_mutex_lock(&(pool->lock));
@@ -26,6 +26,10 @@ static void *thread_function(void *thread_pool) {
 		}
 
 		if (pool->stop && pool->queued == 0) {
+			if (pool->on_thread_stop)
+			{
+				(*pool->on_thread_stop)(thread_ctx);
+			}
 			pthread_mutex_unlock(&(pool->lock));
 			pthread_exit(NULL);
 		}
@@ -35,7 +39,7 @@ static void *thread_function(void *thread_pool) {
 		pool->queued--;
 		pthread_cond_signal(&(pool->finished_signal));
 		pthread_mutex_unlock(&(pool->lock));
-		(*(task.fn))(task.arg);
+		(*(task.fn))(task.arg, thread_ctx);
 	}
 	return NULL;
 }
@@ -58,7 +62,10 @@ void thread_pool_destroy(thread_pool_t *pool) {
 	free(pool->task_queue);
 }
 
-int thread_pool_init(thread_pool_t* pool, int th_count, int q_sz) {
+int thread_pool_init(thread_pool_t* pool, int th_count, int q_sz, void*(*on_start)(void), void (*on_stop)(void *)) {
+
+	pool->on_thread_start = on_start;
+	pool->on_thread_stop = on_stop;
 	pool->QUEUE_SIZE = q_sz;
 	pool->THREAD_COUNT = th_count;
 	pool->queued = 0;
@@ -95,7 +102,7 @@ int thread_pool_init(thread_pool_t* pool, int th_count, int q_sz) {
 	return 0;
 }
 
-void thread_pool_add_task(thread_pool_t *pool, void(*function)(void *), void *arg) {
+void thread_pool_add_task(thread_pool_t *pool, void(*function)(void *, void *), void *arg) {
 	pthread_mutex_lock(&(pool->lock));
 	// sleep thread until other task opens up space in q
 	while (pool->queued >= pool->QUEUE_SIZE && !pool->stop) {
@@ -114,3 +121,4 @@ void thread_pool_add_task(thread_pool_t *pool, void(*function)(void *), void *ar
 
 	pthread_mutex_unlock(&(pool->lock));
 }
+
